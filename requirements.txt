@@ -1,0 +1,72 @@
+# ATHENA - Requirements
+# Autonomous Tactical Harvesting & Execution Network Architecture
+
+# Core Python (3.10+)
+# No external dependencies required for core ATHENA functionality
+
+# The current implementation is SIMULATION MODE
+# All components are self-contained Python with only standard library
+
+# ═══════════════════════════════════════════════════════════════════════
+# CURRENT STATUS: FULLY FUNCTIONAL WITH ZERO EXTERNAL DEPENDENCIES
+# ═══════════════════════════════════════════════════════════════════════
+
+# Standard library only:
+# - dataclasses (Python 3.7+)
+# - typing (Python 3.5+)
+# - datetime (built-in)
+# - logging (built-in)
+# - json (built-in)
+# - pathlib (Python 3.4+)
+# - enum (Python 3.4+)
+
+# ═══════════════════════════════════════════════════════════════════════
+# OPTIONAL: For PRODUCTION deployment (when you replace simulations)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Uncomment these when moving from simulation to real GitHub API:
+
+# GitHub API integration
+# requests>=2.31.0
+# PyGithub>=2.1.1
+
+# Code parsing (for actual code extraction)
+# tree-sitter>=0.20.4
+# astroid>=3.0.0
+
+# Testing frameworks (for real test execution)
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# pytest-benchmark>=4.0.0
+
+# Security scanning
+# bandit>=1.7.5
+# safety>=2.3.5
+
+# Performance testing
+# locust>=2.15.0
+
+# ═══════════════════════════════════════════════════════════════════════
+# NOTES
+# ═══════════════════════════════════════════════════════════════════════
+
+# 1. CURRENT DEMO: Runs with zero dependencies
+#    - All GitHub searches are simulated
+#    - All code extraction is simulated
+#    - All integration is simulated
+#    - All testing is simulated
+
+# 2. WHY THIS WORKS:
+#    - Demonstrates architecture and coordination
+#    - Proves command structure
+#    - Shows complete workflow
+#    - Ready for production upgrade
+
+# 3. TO GO PRODUCTION:
+#    - Uncomment packages above
+#    - Replace simulation functions with real API calls
+#    - Add GitHub token to environment
+#    - Deploy
+
+# 4. INSTALLATION (when ready):
+#    pip install -r requirements.txt

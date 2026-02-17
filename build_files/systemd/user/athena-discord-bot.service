@@ -1,0 +1,18 @@
+[Unit]
+Description=ATHENA Discord Bot (OpenCode + Claw + Core)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Numenor_prime/athena
+ExecStart=%h/Numenor_prime/athena/scripts/start_discord_bot.sh
+Restart=always
+RestartSec=5
+
+# Keep logs in user journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

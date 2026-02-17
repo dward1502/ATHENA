@@ -1,0 +1,83 @@
+# Containerfile for PLUTUS Financial Agent Pod
+# Built on Beelink SER9 running BluefinOS
+
+FROM docker.io/library/python:3.11-slim
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Ollama client libraries
+RUN pip install --no-cache-dir \
+    ollama \
+    fastapi \
+    uvicorn \
+    pydantic \
+    python-multipart
+
+# Create app directory
+WORKDIR /app
+
+# Copy PLUTUS agent code (built by ATHENA)
+COPY plutus_agent.py /app/
+COPY config.yaml /app/
+COPY templates/ /app/templates/
+
+# Expose API port
+EXPOSE 8001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8001/health || exit 1
+
+# Run PLUTUS agent
+CMD ["python", "-u", "plutus_agent.py"]
+
+# ============================================================================
+# BUILD INSTRUCTIONS (On Your RTX 3080 Workstation)
+# ============================================================================
+#
+# 1. ATHENA builds PLUTUS agent code
+# 2. Export to container:
+#
+#    cd ~/Numenor_prime/citadel/pods/plutus-pod
+#    podman build -t plutus:latest .
+#    podman save plutus:latest > plutus.tar
+#
+# 3. Deploy to customer Beelink:
+#
+#    scp plutus.tar customer@beelink.local:~/
+#    ssh customer@beelink.local
+#    podman load < plutus.tar
+#    
+# 4. Create pod with resource limits:
+#
+#    podman pod create \
+#      --name plutus-pod \
+#      --publish 8001:8001
+#    
+#    podman run -d \
+#      --pod plutus-pod \
+#      --name plutus-agent \
+#      --memory 2g \
+#      --cpus 2 \
+#      localhost/plutus:latest
+#
+# ============================================================================
+# RESOURCE ALLOCATION
+# ============================================================================
+#
+# PLUTUS uses Qwen 3.5-7B (4GB VRAM + 2GB RAM)
+# 
+# When pod starts:
+# - Ollama loads Qwen 3.5-7B into shared VRAM (~4GB)
+# - FastAPI server uses ~200MB RAM
+# - Total: 4GB VRAM + 0.2GB RAM
+#
+# When pod stops:
+# - Model unloaded from VRAM
+# - RAM freed
+# - Beelink resources available for other pods
+#
+# ============================================================================
