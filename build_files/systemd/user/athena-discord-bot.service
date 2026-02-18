@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Numenor_prime/athena
-ExecStart=%h/Numenor_prime/athena/scripts/start_discord_bot.sh
+WorkingDirectory=%h/Numenor_Prime/ATHENA
+ExecStart=%h/Numenor_Prime/ATHENA/scripts/start_discord_bot.sh
 Restart=always
 RestartSec=5
 

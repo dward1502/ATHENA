@@ -63,7 +63,7 @@ def main():
     print_phase(1, "GARRISON INITIALIZATION")
     
     print("⚔️  Initializing ATHENA Supreme Commander...")
-    athena = ATHENA(garrison_path="/home/claude/athena-garrison")
+    athena = ATHENA(garrison_path="./athena-garrison")
     
     print("☀️  Deploying APOLLO division (Frontend/Voice)...")
     apollo = APOLLO_OLYMPIAN()

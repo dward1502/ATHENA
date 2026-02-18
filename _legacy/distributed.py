@@ -7,7 +7,7 @@ COMPUTE_NODES = {
         "models": ["qwen3.5:14b-q4", "qwen3.5:7b-fp16"],
     },
     "scout": {
-        "host": "beelink.local",  # mDNS hostname
+        "host": "beelink",  # Tailscale MagicDNS hostname
         "ollama_port": 11435,
         "gpu": "Radeon 780M",
         "vram": "8GB",

@@ -8,7 +8,7 @@
 # All components are self-contained Python with only standard library
 
 # ═══════════════════════════════════════════════════════════════════════
-# CURRENT STATUS: FULLY FUNCTIONAL WITH ZERO EXTERNAL DEPENDENCIES
+# CURRENT STATUS: GitHub API integration uses stdlib only (urllib)
 # ═══════════════════════════════════════════════════════════════════════
 
 # Standard library only:
@@ -24,11 +24,9 @@
 # OPTIONAL: For PRODUCTION deployment (when you replace simulations)
 # ═══════════════════════════════════════════════════════════════════════
 
-# Uncomment these when moving from simulation to real GitHub API:
-
-# GitHub API integration
-# requests>=2.31.0
-# PyGithub>=2.1.1
+# GitHub API integration now uses stdlib urllib (no external deps needed).
+# These are optional for advanced usage:
+# PyGithub>=2.1.1  # richer API wrapper if needed later
 
 # Code parsing (for actual code extraction)
 # tree-sitter>=0.20.4
@@ -50,23 +48,16 @@
 # NOTES
 # ═══════════════════════════════════════════════════════════════════════
 
-# 1. CURRENT DEMO: Runs with zero dependencies
-#    - All GitHub searches are simulated
-#    - All code extraction is simulated
-#    - All integration is simulated
-#    - All testing is simulated
+# 1. GITHUB SCOUT: Uses real GitHub API via stdlib urllib
+#    - Set GITHUB_TOKEN env var for authenticated access (5000 req/hr)
+#    - Works unauthenticated with lower rate limits (60 req/hr)
+#    - Falls back to simulation data if API unavailable
+#    - Results cached with TTL (1hr search, 24hr file trees)
 
-# 2. WHY THIS WORKS:
-#    - Demonstrates architecture and coordination
-#    - Proves command structure
-#    - Shows complete workflow
-#    - Ready for production upgrade
-
-# 3. TO GO PRODUCTION:
-#    - Uncomment packages above
-#    - Replace simulation functions with real API calls
-#    - Add GitHub token to environment
-#    - Deploy
+# 2. STILL SIMULATED:
+#    - Code integration engine (code_integrator.py)
+#    - Test execution (artemis.py)
+#    - Full deployment pipeline
 
 # 4. INSTALLATION (when ready):
 #    pip install -r requirements.txt

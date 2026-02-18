@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from athena import Olympian, Component, Intel, DivisionStatus
+from github_scout import GitHubScout
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from dataclasses import dataclass
@@ -199,12 +200,13 @@ class ORPHEUS(Titan):
     
     def __init__(self):
         super().__init__("ORPHEUS", "Voice & Audio Systems")
+        self.scout = GitHubScout("ORPHEUS_SCOUT", "Voice & Audio Systems")
         self.target_repos = [
-            "Picovoice/porcupine",  # Wake word
-            "openai/whisper",  # STT
-            "coqui-ai/TTS",  # TTS
-            "speechbrain/speechbrain",  # Audio ML
-            "MycroftAI/mycroft-precise"  # Wake word alt
+            "Picovoice/porcupine",
+            "openai/whisper",
+            "coqui-ai/TTS",
+            "speechbrain/speechbrain",
+            "MycroftAI/mycroft-precise",
         ]
         self.voice_components = [
             "wake_word_detection",
@@ -212,18 +214,26 @@ class ORPHEUS(Titan):
             "text_to_speech",
             "audio_preprocessing",
             "voice_activity_detection",
-            "noise_cancellation"
+            "noise_cancellation",
         ]
     
     def scout_voice_repos(self) -> List[Dict]:
-        """Scout voice-specific repositories"""
+        """Scout voice repositories via real GitHub API with fallback."""
+        repos = self.scout.scout_repositories(
+            query="voice recognition wake word speech python",
+            min_stars=500,
+            max_results=5,
+        )
+
         results = []
-        for repo in self.target_repos:
+        for repo in repos:
+            findings = self.scout.analyze_components(repo, self.voice_components)
             results.append({
-                "repo": repo,
-                "license": "Apache-2.0",  # Most are Apache or MIT
-                "components": self.voice_components[:3],
-                "quality_score": 0.9
+                "repo": repo.full_name,
+                "license": repo.license,
+                "components": findings.components_found,
+                "quality_score": repo.quality_score,
+                "dependencies": findings.dependencies,
             })
         return results
 
