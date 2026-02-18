@@ -1,0 +1,887 @@
+#!/usr/bin/env python3
+"""
+WORKING Discord Bot → Oh My OpenCode → ATHENA Integration
+
+FIXES:
+1. Actually runs OpenCode in background (tmux)
+2. Streams output to Discord in real-time
+3. Captures your CLI responses
+4. Allows interaction via Discord while it runs
+"""
+
+import discord
+from discord.ext import commands, tasks
+import subprocess
+import asyncio
+import os
+import re
+import shlex
+from typing import Any, Dict, List, cast
+from pathlib import Path
+from datetime import datetime
+import json
+import aiohttp
+
+from athena.interfaces.ceo_bridge import CEOCommand
+
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover
+    load_dotenv = None
+
+# Bot setup
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Paths
+if load_dotenv:
+    load_dotenv()
+
+NUMENOR = Path(
+    os.getenv("NUMENOR_PATH", str(Path.home() / "Numenor_Prime"))
+).expanduser()
+athena_dir = Path(os.getenv("ATHENA_PATH", str(NUMENOR / "ATHENA"))).expanduser()
+if not athena_dir.exists():
+    legacy_path = NUMENOR / "athena"
+    if legacy_path.exists():
+        athena_dir = legacy_path
+ATHENA_DIR = athena_dir
+OPENCODE_DIR = NUMENOR
+ATHENA_GARRISON_PATH = Path(
+    os.getenv("ATHENA_GARRISON_PATH", str(Path.home() / "Eregion" / "athena-garrison"))
+).expanduser()
+ATHENA_REQUIRE_CORE = os.getenv("ATHENA_REQUIRE_CORE", "1").strip() not in {
+    "0",
+    "false",
+    "False",
+}
+ATHENA_CORE_BASE_URL = os.getenv("CORE_API_BASE_URL")
+ATHENA_CORE_SCORE_THRESHOLD = os.getenv("ATHENA_CORE_SCORE_THRESHOLD", "0.35")
+ATHENA_CORE_TEMPLATE_SCORE_THRESHOLD = os.getenv(
+    "ATHENA_CORE_TEMPLATE_SCORE_THRESHOLD", "0.50"
+)
+ATHENA_CORE_REFRESH_TIMEOUT = os.getenv("ATHENA_CORE_REFRESH_TIMEOUT", "8")
+
+CITADEL_URL = os.getenv("CITADEL_URL", "http://127.0.0.1:8200")
+
+# Active sessions
+active_sessions: Dict[str, Any] = {}
+runtime_tools: Dict[str, Any] = {}
+channel_autonomy: Dict[int, bool] = {}
+channel_awaiting_next_task: Dict[int, bool] = {}
+_ceo_command_cache: CEOCommand | None = None
+handoff_telemetry: Dict[str, Any] = {"events": [], "success": 0, "failure": 0}
+
+
+def _record_handoff_event(
+    op: str,
+    session_id: str,
+    success: bool,
+    attempt: int,
+    error: str = "",
+) -> None:
+    event = {
+        "ts": datetime.now().isoformat(),
+        "op": op,
+        "session_id": session_id,
+        "success": success,
+        "attempt": attempt,
+        "error": error,
+    }
+    handoff_telemetry["events"].append(event)
+    if len(handoff_telemetry["events"]) > 200:
+        handoff_telemetry["events"] = handoff_telemetry["events"][-200:]
+    if success:
+        handoff_telemetry["success"] += 1
+    else:
+        handoff_telemetry["failure"] += 1
+
+
+async def _run_tmux_with_retry(
+    cmd: List[str],
+    op: str,
+    session_id: str,
+    retries: int = 3,
+    base_delay: float = 0.35,
+) -> subprocess.CompletedProcess[str]:
+    attempt = 1
+    last = subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="")
+    while attempt <= max(1, retries):
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        last = result
+        if result.returncode == 0:
+            _record_handoff_event(op, session_id, True, attempt, "")
+            return result
+        err = (result.stderr or result.stdout or "tmux_error").strip()
+        _record_handoff_event(op, session_id, False, attempt, err[:200])
+        if attempt < retries:
+            await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
+        attempt += 1
+    return last
+
+
+def _latest_channel_session(channel_id: int, statuses: set[str] | None = None):
+    for session_id in sorted(active_sessions.keys(), reverse=True):
+        session = active_sessions[session_id]
+        if session.channel_id != channel_id:
+            continue
+        if statuses and session.status not in statuses:
+            continue
+        return session
+    return None
+
+
+async def _recommended_next_task(channel_id: int) -> str:
+    running = _latest_channel_session(channel_id, statuses={"RUNNING"})
+    if running:
+        return f"Continue and finalize validation for: {running.task[:120]}"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{CITADEL_URL}/api/status",
+                timeout=aiohttp.ClientTimeout(total=4),
+            ) as resp:
+                if resp.status == 200:
+                    status = await resp.json()
+                    progress = status.get("progress") or {}
+                    next_tasks = progress.get("next_tasks") or []
+                    if isinstance(next_tasks, list) and next_tasks:
+                        first = next_tasks[0] if isinstance(next_tasks[0], dict) else {}
+                        title = str(first.get("title") or "").strip()
+                        phase = str(first.get("phase") or "").strip()
+                        if title and phase:
+                            return f"[{phase}] {title}"
+                        if title:
+                            return title
+    except Exception:
+        pass
+
+    latest = _latest_channel_session(channel_id)
+    if latest:
+        return f"Ship the next increment after: {latest.task[:120]}"
+    return "Run !stack, then start next objective with !ulw <task>."
+
+
+def _ceo_command() -> CEOCommand:
+    global _ceo_command_cache
+    if _ceo_command_cache is None:
+        _ceo_command_cache = CEOCommand()
+    return _ceo_command_cache
+
+
+def _ceo_relay_digest(force: bool = False) -> str:
+    try:
+        cmd = _ceo_command()
+        payload = cmd.central_node.maybe_generate_mesh_assessment_rollup(
+            cadence_events=10,
+            cadence_hours=24,
+            limit=100,
+            force=force,
+        )
+        return cmd.format_ceo_relay_digest(payload)
+    except Exception:
+        return "ARANDUR DIGEST | unavailable"
+
+
+def _ceo_rollup_status() -> str:
+    try:
+        cmd = _ceo_command()
+        status = cmd.central_node.rollup_cadence_status()
+        return (
+            "ARANDUR ROLLUP STATUS"
+            + f" | last_generated_at={status.get('last_generated_at', '')}"
+            + f" | last_event_count={status.get('last_event_count', 0)}"
+            + f" | total_events={status.get('total_events', 0)}"
+            + f" | pending_delta={status.get('pending_delta', 0)}"
+        )
+    except Exception:
+        return "ARANDUR ROLLUP STATUS | unavailable"
+
+
+async def _start_ulw_session(channel: Any, task: str, source: str) -> Any:
+    session_id = f"ULW-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    await channel.send(
+        f"🔥 **ULTRA WORK MODE**\n"
+        f"```Session: {session_id}\nTask: {task}```\n"
+        f"Source: {source}"
+    )
+
+    session = OpenCodeSession(session_id, channel.id, task)
+    active_sessions[session_id] = session
+    channel_autonomy[channel.id] = True
+    channel_awaiting_next_task[channel.id] = False
+
+    if await session.start():
+        await channel.send(
+            f"✅ **Session started**\n"
+            f"• Tmux: `{session.tmux_session}`\n"
+            f"• Log: `{session.log_file}`\n"
+            f"• Auto-mode: reply in this channel to continue task flow\n"
+            f"• Manual input: `!input {session_id} <text>`"
+        )
+        return session
+
+    await channel.send("❌ **Failed to start session**")
+    del active_sessions[session_id]
+    return None
+
+
+class OpenCodeSession:
+    """Manages an active OpenCode session in tmux"""
+
+    def __init__(self, session_id: str, channel_id: int, task: str):
+        self.session_id = session_id
+        self.channel_id = channel_id
+        self.task = task
+        self.tmux_session = f"omc-{session_id}"
+        self.log_file = NUMENOR / f"logs/{session_id}.log"
+        self.status = "STARTING"
+        self.last_output_line = 0
+
+    async def start(self):
+        """Start OpenCode in tmux session"""
+
+        # Create log directory
+        self.log_file.parent.mkdir(exist_ok=True)
+
+        # Create workspace
+        workspace = NUMENOR / f"workspace/{self.session_id}"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        # Create prompt file
+        prompt_file = workspace / "prompt.md"
+        prompt_file.write_text(f"""# Task
+
+{self.task}
+
+# ATHENA Integration
+
+You have access to ATHENA warfare system at:
+`python {ATHENA_DIR}/athena.py --objective "..." --priority CRITICAL`
+
+ATHENA provides:
+- Code harvesting from GitHub
+- Multi-agent coordination
+- Automated testing
+- Production-ready output
+
+# Session Info
+
+Session ID: {self.session_id}
+This session is monitored via Discord.
+All output is logged to: {self.log_file}
+
+Work until task is 100% complete.
+""")
+
+        # Kill existing session if any
+        subprocess.run(
+            ["tmux", "kill-session", "-t", self.tmux_session], stderr=subprocess.DEVNULL
+        )
+
+        # Start tmux session with OpenCode
+        run_cmd = (
+            f"cd {shlex.quote(str(workspace))} && "
+            f"opencode --prompt {shlex.quote(str(prompt_file))} 2>&1 | "
+            f"tee {shlex.quote(str(self.log_file))}"
+        )
+        cmd = ["tmux", "new-session", "-d", "-s", self.tmux_session, run_cmd]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            self.status = "RUNNING"
+            return True
+        else:
+            self.status = "FAILED"
+            return False
+
+    async def send_input(self, text: str) -> bool:
+        result = await _run_tmux_with_retry(
+            ["tmux", "send-keys", "-t", self.tmux_session, text, "Enter"],
+            op="send_input",
+            session_id=self.session_id,
+            retries=3,
+        )
+        with open(self.log_file, "a") as f:
+            f.write(f"\n[USER INPUT] {text}\n")
+        return result.returncode == 0
+
+    def get_new_output(self) -> List[str]:
+        """Get new lines from log file since last check"""
+
+        if not self.log_file.exists():
+            return []
+
+        with open(self.log_file, "r") as f:
+            lines = f.readlines()
+
+        new_lines = lines[self.last_output_line :]
+        self.last_output_line = len(lines)
+
+        return [line.strip() for line in new_lines if line.strip()]
+
+    def is_alive(self) -> bool:
+        """Check if tmux session is still running"""
+
+        result = subprocess.run(
+            ["tmux", "has-session", "-t", self.tmux_session], capture_output=True
+        )
+        return result.returncode == 0
+
+    def stop(self):
+        """Stop the session"""
+
+        subprocess.run(
+            ["tmux", "kill-session", "-t", self.tmux_session], stderr=subprocess.DEVNULL
+        )
+        self.status = "STOPPED"
+
+
+@bot.event
+async def on_ready():
+    print(f"🤖 ATHENA Bot ready: {bot.user}")
+    print("👑 CEO Persona: Arandur Prime (Sceptre of Numenor)")
+    print(f"   Monitoring {len(active_sessions)} active sessions")
+
+    # Start background task to monitor sessions
+    if not monitor_sessions.is_running():
+        monitor_sessions.start()
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author == bot.user:
+        return
+
+    if message.content.startswith("!"):
+        await bot.process_commands(message)
+        return
+
+    channel_id = message.channel.id
+    if not channel_autonomy.get(channel_id):
+        await bot.process_commands(message)
+        return
+
+    running_session = _latest_channel_session(channel_id, statuses={"RUNNING"})
+    if running_session:
+        ok = await running_session.send_input(message.content.strip())
+        if ok:
+            await message.channel.send(
+                f"📝 Routed to `{running_session.session_id}` and continuing execution."
+            )
+        else:
+            await message.channel.send(
+                f"⚠️ Input handoff retry failed for `{running_session.session_id}`."
+            )
+        await bot.process_commands(message)
+        return
+
+    if not channel_awaiting_next_task.get(channel_id):
+        await bot.process_commands(message)
+        return
+
+    next_task = message.content.strip()
+    if next_task:
+        await _start_ulw_session(
+            message.channel, next_task, source=f"discord:{message.author}"
+        )
+    await bot.process_commands(message)
+
+
+@tasks.loop(seconds=5)
+async def monitor_sessions():
+    """Background task to monitor all active sessions"""
+
+    for session_id, session in list(active_sessions.items()):
+        channel_obj = bot.get_channel(session.channel_id)
+        if not channel_obj:
+            continue
+        channel = cast(Any, channel_obj)
+
+        # Check if session is still alive
+        if not session.is_alive() and session.status == "RUNNING":
+            session.status = "COMPLETED"
+            channel_awaiting_next_task[session.channel_id] = True
+            recommendation = await _recommended_next_task(session.channel_id)
+            digest = _ceo_relay_digest()
+            await channel.send(
+                f"✅ **Session {session_id} completed**\n"
+                f"Recommended next task: `{recommendation}`\n"
+                f"CEO relay: `{digest}`\n"
+                "Reply with the next task and I will execute it automatically."
+            )
+            continue
+
+        # Get new output
+        new_lines = session.get_new_output()
+
+        if new_lines:
+            # Filter for important updates
+            important = [
+                line
+                for line in new_lines
+                if any(
+                    keyword in line.lower()
+                    for keyword in [
+                        "athena",
+                        "deploying",
+                        "complete",
+                        "error",
+                        "warning",
+                        "success",
+                        "failed",
+                        "done",
+                        "working on",
+                        "task",
+                        "olympian",
+                        "division",
+                    ]
+                )
+            ]
+
+            if important:
+                # Send to Discord (max 2000 chars)
+                output = "\n".join(important[-10:])  # Last 10 important lines
+                if len(output) > 1900:
+                    output = output[-1900:]
+
+                await channel.send(f"```\n{output}\n```")
+
+
+@bot.command(name="ulw")
+async def ultrawork(ctx, *, task: str):
+    """
+    Ultra Work mode: Start OpenCode session
+    Usage: !ulw build PLUTUS financial agent
+    """
+
+    await _start_ulw_session(ctx.channel, task, source=f"command:{ctx.author}")
+
+
+@bot.command(name="input")
+async def send_input(ctx, session_id: str, *, text: str):
+    """
+    Send input to running session
+    Usage: !input ULW-20260216-120000 yes, continue with that approach
+    """
+
+    if session_id not in active_sessions:
+        await ctx.send(f"❌ Session {session_id} not found")
+        return
+
+    session = active_sessions[session_id]
+    ok = await session.send_input(text)
+
+    if ok:
+        await ctx.send(f"📝 **Sent to {session_id}:**\n```{text}```")
+    else:
+        await ctx.send(f"⚠️ **Send failed after retries for {session_id}**")
+
+
+@bot.command(name="log")
+async def view_log(ctx, session_id: str, lines: int = 20):
+    """
+    View recent log lines
+    Usage: !log ULW-20260216-120000 50
+    """
+
+    if session_id not in active_sessions:
+        await ctx.send(f"❌ Session {session_id} not found")
+        return
+
+    session = active_sessions[session_id]
+
+    if not session.log_file.exists():
+        await ctx.send(f"❌ No log file yet")
+        return
+
+    with open(session.log_file, "r") as f:
+        all_lines = f.readlines()
+
+    recent = all_lines[-lines:]
+    output = "".join(recent)
+
+    # Split if too long
+    if len(output) > 1900:
+        output = output[-1900:]
+
+    await ctx.send(f"📜 **Last {len(recent)} lines:**\n```\n{output}\n```")
+
+
+@bot.command(name="attach")
+async def attach_terminal(ctx, session_id: str):
+    """
+    Get command to attach to tmux session
+    Usage: !attach ULW-20260216-120000
+    """
+
+    if session_id not in active_sessions:
+        await ctx.send(f"❌ Session {session_id} not found")
+        return
+
+    session = active_sessions[session_id]
+
+    await ctx.send(
+        f"🖥️  **To attach to terminal:**\n"
+        f"```bash\n"
+        f"tmux attach-session -t {session.tmux_session}\n"
+        f"# Detach with: Ctrl+B, then D\n"
+        f"```"
+    )
+
+
+@bot.command(name="stop")
+async def stop_session(ctx, session_id: str):
+    """
+    Stop a running session
+    Usage: !stop ULW-20260216-120000
+    """
+
+    if session_id not in active_sessions:
+        await ctx.send(f"❌ Session {session_id} not found")
+        return
+
+    session = active_sessions[session_id]
+    session.stop()
+
+    await ctx.send(f"🛑 **Stopped {session_id}**")
+
+
+@bot.command(name="sessions")
+async def list_sessions(ctx):
+    """List all active sessions"""
+
+    if not active_sessions:
+        await ctx.send("No active sessions")
+        return
+
+    output = []
+    for sid, session in active_sessions.items():
+        alive = "🟢" if session.is_alive() else "🔴"
+        output.append(f"{alive} **{sid}** ({session.status})")
+        output.append(f"   Task: {session.task[:80]}")
+        output.append(f"   Tmux: `{session.tmux_session}`\n")
+
+    await ctx.send("\n".join(output))
+
+
+@bot.command(name="digest")
+async def relay_digest(ctx, mode: str = ""):
+    mode_key = mode.strip().lower()
+    if mode_key == "status":
+        status = _ceo_rollup_status()
+        await ctx.send(f"📡 **ARANDUR Rollup Status**\n`{status}`")
+        return
+
+    force = mode.strip().lower() in {"force", "publish", "now", "1", "true"}
+    digest = _ceo_relay_digest(force=force)
+    status = "forced" if force else "cadence"
+    await ctx.send(f"📡 **ARANDUR Relay Digest** ({status})\n`{digest}`")
+
+
+@bot.command(name="stack")
+async def stack_status(ctx):
+    """Show runtime stack readiness (OpenCode + Claw + Core env)."""
+    lines = []
+    lines.append(f"NUMENOR_PATH: {NUMENOR}")
+    lines.append(
+        f"ATHENA entrypoint: {'OK' if (ATHENA_DIR / 'athena.py').exists() else 'MISSING'}"
+    )
+    for tool in ["tmux", "opencode", "zeptoclaw", "picoclaw"]:
+        path = runtime_tools.get(tool) or "MISSING"
+        lines.append(f"{tool}: {path}")
+
+    omoc_config = Path.home() / ".config" / "opencode" / "oh-my-opencode.json"
+    lines.append(
+        f"oh-my-opencode config: {'OK' if omoc_config.exists() else 'MISSING'}"
+    )
+    lines.append(
+        f"CORE_API_KEY set: {'YES' if bool(os.getenv('CORE_API_KEY')) else 'NO'}"
+    )
+    await ctx.send("```" + "\n".join(lines) + "```")
+
+
+@bot.command(name="citadel")
+async def citadel_process(ctx, *, prompt: str):
+    """
+    Send a prompt through the full CITADEL pipeline.
+    Usage: !citadel Should we expand into the European market?
+    """
+    await ctx.send(f"**CITADEL** Processing...\n```{prompt[:200]}```")
+
+    payload = {
+        "prompt": prompt,
+        "context": {},
+        "user_id": str(ctx.author),
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{CITADEL_URL}/api/process",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=180),
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    await ctx.send(
+                        f"CITADEL error ({resp.status}):\n```{error_text[:500]}```"
+                    )
+                    return
+
+                data = await resp.json()
+
+        content = data.get("content", "No response")
+        agents_used = data.get("agents_used", [])
+        validated = data.get("validated", False)
+        summary = data.get("validation_summary", "")
+        metadata = data.get("metadata", {})
+
+        triad_icon = "\u2705" if validated else "\u26a0\ufe0f"
+        human_review = metadata.get("requires_human_review", False)
+
+        header = (
+            f"{triad_icon} **CITADEL Response**\n"
+            f"Agents: {', '.join(agents_used)} | "
+            f"Triad: {summary}\n"
+        )
+        if human_review:
+            header += "**\u26a0\ufe0f Human review required before action.**\n"
+
+        # Discord max is 2000 chars — split if needed
+        max_body = 2000 - len(header) - 10
+        body = content[:max_body]
+        await ctx.send(header + f"```\n{body}\n```")
+
+        if len(content) > max_body:
+            remaining = content[max_body : max_body + 1800]
+            await ctx.send(f"```\n{remaining}\n```")
+
+    except asyncio.TimeoutError:
+        await ctx.send("CITADEL timed out (180s). The LLM may be under heavy load.")
+    except aiohttp.ClientConnectorError:
+        await ctx.send(
+            "Cannot reach CITADEL server.\n"
+            f"Expected at `{CITADEL_URL}`.\n"
+            "Start it: `tmux new -d -s citadel-server '...'`"
+        )
+    except Exception as e:
+        await ctx.send(f"CITADEL error: `{type(e).__name__}: {e}`")
+
+
+@bot.command(name="citadel-status")
+async def citadel_status(ctx):
+    """Show CITADEL system health."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{CITADEL_URL}/health",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                health = await resp.json()
+
+        lines = [
+            f"CITADEL Server: {'ONLINE' if health.get('ok') else 'DEGRADED'}",
+            f"URL: {CITADEL_URL}",
+        ]
+        await ctx.send("```\n" + "\n".join(lines) + "\n```")
+
+    except aiohttp.ClientConnectorError:
+        await ctx.send(f"CITADEL server OFFLINE at `{CITADEL_URL}`")
+    except Exception as e:
+        await ctx.send(f"CITADEL status check failed: `{e}`")
+
+
+@bot.command(name="athena")
+async def deploy_athena(ctx, *, objective: str):
+    """
+    Deploy ATHENA directly
+    Usage: !athena build invoice module for PLUTUS
+    """
+
+    await ctx.send(f"⚔️  **ATHENA DEPLOYING**\n```{objective}```")
+
+    # Run ATHENA in tmux
+    session_id = f"ATHENA-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    tmux_session = f"athena-{session_id}"
+    log_file = NUMENOR / f"logs/{session_id}.log"
+    log_file.parent.mkdir(exist_ok=True)
+    deadline = datetime.now().replace(microsecond=0).isoformat()
+
+    athena_args = [
+        "python",
+        str(ATHENA_DIR / "athena.py"),
+        "--objective",
+        objective,
+        "--deadline",
+        deadline,
+        "--garrison-path",
+        str(ATHENA_GARRISON_PATH),
+        "--core-score-threshold",
+        str(ATHENA_CORE_SCORE_THRESHOLD),
+        "--core-template-score-threshold",
+        str(ATHENA_CORE_TEMPLATE_SCORE_THRESHOLD),
+        "--core-refresh-timeout",
+        str(ATHENA_CORE_REFRESH_TIMEOUT),
+        "--priority",
+        "CRITICAL",
+        "--require-core" if ATHENA_REQUIRE_CORE else "--no-require-core",
+    ]
+    if ATHENA_CORE_BASE_URL:
+        athena_args.extend(["--core-base-url", str(ATHENA_CORE_BASE_URL)])
+    run_cmd = " ".join(shlex.quote(part) for part in athena_args)
+    run_cmd = f"{run_cmd} 2>&1 | tee {shlex.quote(str(log_file))}"
+
+    cmd = ["tmux", "new-session", "-d", "-s", tmux_session, run_cmd]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode == 0:
+        await ctx.send(
+            f"✅ **ATHENA deployed**\n"
+            f"Session: {session_id}\n"
+            f"Tmux: `{tmux_session}`\n"
+            f"Log: `!tail {log_file}`"
+        )
+
+        # Monitor it
+        asyncio.create_task(
+            monitor_athena_session(ctx.channel, session_id, tmux_session, log_file)
+        )
+    else:
+        await ctx.send(f"❌ Failed: ```{result.stderr}```")
+
+
+async def monitor_athena_session(channel, session_id, tmux_session, log_file):
+    """Monitor ATHENA session and send updates"""
+
+    last_line = 0
+
+    while True:
+        await asyncio.sleep(10)
+
+        # Check if still running
+        result = subprocess.run(
+            ["tmux", "has-session", "-t", tmux_session], capture_output=True
+        )
+
+        if result.returncode != 0:
+            recommendation = await _recommended_next_task(channel.id)
+            digest = _ceo_relay_digest()
+            await channel.send(
+                f"✅ **{session_id} completed**\n"
+                f"Recommended next task: `{recommendation}`\n"
+                f"CEO relay: `{digest}`"
+            )
+            break
+
+        # Read new output
+        if log_file.exists():
+            with open(log_file, "r") as f:
+                lines = f.readlines()
+
+            new_lines = lines[last_line:]
+            last_line = len(lines)
+
+            # Send important updates
+            important = [
+                line.strip()
+                for line in new_lines
+                if any(
+                    keyword in line.lower()
+                    for keyword in [
+                        "olympian",
+                        "deploying",
+                        "complete",
+                        "error",
+                        "success",
+                    ]
+                )
+            ]
+
+            if important:
+                output = "\n".join(important[-5:])
+                if len(output) < 1900:
+                    await channel.send(f"```\n{output}\n```")
+
+
+@bot.command(name="tail")
+async def tail_file(ctx, filepath: str, lines: int = 20):
+    """
+    Tail a log file
+    Usage: !tail /home/user/Numenor_prime/logs/ATHENA-20260216.log
+    """
+
+    path = Path(filepath)
+
+    if not path.exists():
+        await ctx.send(f"❌ File not found: {filepath}")
+        return
+
+    result = subprocess.run(
+        ["tail", f"-n{lines}", str(path)], capture_output=True, text=True
+    )
+
+    output = result.stdout
+    if len(output) > 1900:
+        output = output[-1900:]
+
+    await ctx.send(f"```\n{output}\n```")
+
+
+# Run bot
+if __name__ == "__main__":
+    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    if not TOKEN:
+        print("❌ Set DISCORD_BOT_TOKEN environment variable")
+        exit(1)
+
+    # Ensure tmux is installed
+    if subprocess.run(["which", "tmux"], capture_output=True).returncode != 0:
+        print("❌ tmux not installed. Run: sudo dnf install tmux")
+        exit(1)
+
+    # Ensure OpenCode is installed
+    if subprocess.run(["which", "opencode"], capture_output=True).returncode != 0:
+        print("❌ opencode not installed in this runtime")
+        exit(1)
+
+    # Ensure Oh My OpenCode config exists
+    omoc_config = Path.home() / ".config" / "opencode" / "oh-my-opencode.json"
+    if not omoc_config.exists():
+        print(f"❌ Missing oh-my-opencode config: {omoc_config}")
+        exit(1)
+
+    if not ATHENA_DIR.exists():
+        print(f"❌ ATHENA directory not found: {ATHENA_DIR}")
+        exit(1)
+    if not (ATHENA_DIR / "athena.py").exists():
+        print(f"❌ ATHENA entrypoint not found: {ATHENA_DIR / 'athena.py'}")
+        exit(1)
+    ATHENA_GARRISON_PATH.mkdir(parents=True, exist_ok=True)
+
+    required_stack = os.getenv("REQUIRE_CLAW_STACK", "0").strip() not in {
+        "0",
+        "false",
+        "False",
+    }
+    for tool in ["tmux", "opencode", "zeptoclaw", "picoclaw"]:
+        result = subprocess.run(["which", tool], capture_output=True, text=True)
+        path = result.stdout.strip() if result.returncode == 0 else None
+        runtime_tools[tool] = path
+        if required_stack and not path:
+            print(f"❌ Required tool missing: {tool}")
+            exit(1)
+
+    print("🚀 Starting ATHENA Discord Bot...")
+    print(f"   Numenor Prime: {NUMENOR}")
+    print(f"   ATHENA: {ATHENA_DIR}")
+    print(f"   ATHENA garrison: {ATHENA_GARRISON_PATH}")
+    print(f"   OpenCode config: {omoc_config}")
+    print(f"   Claw stack strict mode: {required_stack}")
+    print(f"   ATHENA require core: {ATHENA_REQUIRE_CORE}")
+
+    bot.run(TOKEN)

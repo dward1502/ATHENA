@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "athena"
+version = "0.1.0"
+description = "Autonomous Tactical Harvesting & Execution Network Architecture"
+requires-python = ">=3.11"
+
+[project.scripts]
+athena = "athena.commander:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["athena*"]
