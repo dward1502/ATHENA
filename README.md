@@ -2,12 +2,14 @@
 
 ATHENA agent-based software archaeology meets modular composition.
 
+TODO: Give her a backstory read ATHENA.md 
+
 ## Required Runtime Stack
 
 - `picoclaw` + `zeptoclaw` for low-RAM operation on Bluefin/Podman targets.
 - `RedPlanet Core` for persistent memory/context.
 - `OpenCode + oh-my-opencode` for autonomous CEO command execution.
-- Main operational folder: `~/Numenor_prime` on main PC.
+- Main operational folder: `~/Numenor_prime/ATHENA` on main PC.
 - Discord as CEO control interface.
 
 ## Repository Map

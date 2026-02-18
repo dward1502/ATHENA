@@ -16,16 +16,19 @@ This is the current high-level map of the repository, organized for staged analy
 - `olympians/base.py` - Minimal base type.
 - `plutus-pod-containerfile` - Container build spec for pod deployment.
 - `requirements.txt` - Python dependencies.
+- `ATHENA.md` - Founding vision document and build log. Defines the agent swarm concept, military hierarchy (ATHENA → Olympians → Titans → Heroes → Warriors → Hoplites), and chronicles build phases 1–5.
 - `docs/` - Architecture/setup/integration documentation.
 
 ## Operational Constraints
 
 - Runtime is BluefinOS + Podman pods on constrained hardware.
-- `picoclaw` + `zeptoclaw` are required (RAM efficiency is mandatory).
+- `zeroclaw` + `zeptoclaw` are required (RAM efficiency is mandatory).
 - `RedPlanet Core` is required (persistent memory/context).
 - `OpenCode + oh-my-opencode` is required for autonomous command execution.
 - Main operational path is `~/Numenor_prime` on the main PC.
 - Discord is the CEO control channel.
+check to make sure these are all installed and configured correctly.
+Also make it so the ones that are needed to run in the background are doing so. ollama 
 
 ## Documentation Structure
 

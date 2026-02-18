@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-NUMENOR_PATH="${NUMENOR_PATH:-$HOME/Numenor_prime}"
-ATHENA_DIR="${ATHENA_PATH:-$NUMENOR_PATH/athena}"
-ATHENA_FILE="$ATHENA_DIR/athena.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ATHENA_DIR="${ATHENA_PATH:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+NUMENOR_PATH="${NUMENOR_PATH:-$(cd "$ATHENA_DIR/.." && pwd)}"
+ATHENA_MODULE="${ATHENA_MODULE:-athena.commander}"
+ATHENA_MODULE_FILE="$ATHENA_DIR/athena/commander.py"
 ATHENA_GARRISON_PATH="${ATHENA_GARRISON_PATH:-$NUMENOR_PATH/athena-garrison}"
 CORE_API_BASE_URL="${CORE_API_BASE_URL:-https://core.heysol.ai}"
 ATHENA_REQUIRE_CORE="${ATHENA_REQUIRE_CORE:-1}"
@@ -24,10 +26,10 @@ for bin in python tmux opencode zeptoclaw picoclaw; do
   fi
 done
 
-if [[ -f "$ATHENA_FILE" ]]; then
-  ok "ATHENA entrypoint found: $ATHENA_FILE"
+if [[ -f "$ATHENA_MODULE_FILE" ]]; then
+  ok "ATHENA module entrypoint found: $ATHENA_MODULE_FILE"
 else
-  err "ATHENA entrypoint missing: $ATHENA_FILE"
+  err "ATHENA module entrypoint missing: $ATHENA_MODULE_FILE"
   exit 1
 fi
 
@@ -58,9 +60,9 @@ mkdir -p "$ATHENA_GARRISON_PATH"
 ok "garrison path writable: $ATHENA_GARRISON_PATH"
 
 if [[ "$ATHENA_REQUIRE_CORE" == "1" ]]; then
-  python "$ATHENA_FILE" --status --garrison-path "$ATHENA_GARRISON_PATH" --core-base-url "$CORE_API_BASE_URL" --require-core >/tmp/athena_preflight_status.txt
+  python -m "$ATHENA_MODULE" --status --garrison-path "$ATHENA_GARRISON_PATH" --core-base-url "$CORE_API_BASE_URL" --require-core >/tmp/athena_preflight_status.txt
 else
-  python "$ATHENA_FILE" --status --garrison-path "$ATHENA_GARRISON_PATH" --no-require-core >/tmp/athena_preflight_status.txt
+  python -m "$ATHENA_MODULE" --status --garrison-path "$ATHENA_GARRISON_PATH" --no-require-core >/tmp/athena_preflight_status.txt
 fi
 ok "ATHENA status command succeeded"
 

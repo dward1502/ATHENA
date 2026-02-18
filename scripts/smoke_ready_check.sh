@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-NUMENOR_PATH="${NUMENOR_PATH:-$HOME/Numenor_prime}"
-ATHENA_DIR="${ATHENA_PATH:-$NUMENOR_PATH/athena}"
-ATHENA_FILE="$ATHENA_DIR/athena.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ATHENA_DIR="${ATHENA_PATH:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+NUMENOR_PATH="${NUMENOR_PATH:-$(cd "$ATHENA_DIR/.." && pwd)}"
+ATHENA_MODULE="${ATHENA_MODULE:-athena.commander}"
 ATHENA_GARRISON_PATH="${ATHENA_GARRISON_PATH:-$NUMENOR_PATH/athena-garrison}"
 CORE_API_BASE_URL="${CORE_API_BASE_URL:-https://core.heysol.ai}"
 ATHENA_REQUIRE_CORE="${ATHENA_REQUIRE_CORE:-1}"
@@ -13,22 +14,22 @@ printf "== ATHENA Smoke Ready Check ==\n"
 
 printf "\n== ATHENA status smoke ==\n"
 if [[ "$ATHENA_REQUIRE_CORE" == "1" ]]; then
-  python "$ATHENA_FILE" --status --garrison-path "$ATHENA_GARRISON_PATH" --core-base-url "$CORE_API_BASE_URL" --require-core >/tmp/athena_smoke_status.txt
+  python -m "$ATHENA_MODULE" --status --garrison-path "$ATHENA_GARRISON_PATH" --core-base-url "$CORE_API_BASE_URL" --require-core >/tmp/athena_smoke_status.txt
 else
-  python "$ATHENA_FILE" --status --garrison-path "$ATHENA_GARRISON_PATH" --no-require-core >/tmp/athena_smoke_status.txt
+  python -m "$ATHENA_MODULE" --status --garrison-path "$ATHENA_GARRISON_PATH" --no-require-core >/tmp/athena_smoke_status.txt
 fi
 printf "[OK] ATHENA status command succeeded\n"
 
 printf "\n== ATHENA mission smoke ==\n"
 if [[ "$ATHENA_REQUIRE_CORE" == "1" ]]; then
-  python "$ATHENA_FILE" \
+  python -m "$ATHENA_MODULE" \
     --objective "smoke test discord/core pipeline" \
     --priority HIGH \
     --garrison-path "$ATHENA_GARRISON_PATH" \
     --core-base-url "$CORE_API_BASE_URL" \
     --require-core >/tmp/athena_smoke_mission.txt
 else
-  python "$ATHENA_FILE" \
+  python -m "$ATHENA_MODULE" \
     --objective "smoke test discord/core pipeline" \
     --priority HIGH \
     --garrison-path "$ATHENA_GARRISON_PATH" \

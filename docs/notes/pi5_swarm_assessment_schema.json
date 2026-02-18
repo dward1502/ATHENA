@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "schema_id": "athena_pi5_swarm_assessment_v1",
+  "status": "queued_for_implementation",
+  "required_fields": {
+    "event_id": "string",
+    "timestamp": "iso8601",
+    "mission_id": "string",
+    "task_id": "string",
+    "delegation_mode": "local|mesh|cloud_fallback",
+    "node": {
+      "name": "string",
+      "role": "string",
+      "tailscale_host": "string",
+      "tailscale_ip": "string",
+      "reachable": "boolean"
+    },
+    "policy": {
+      "node_soul_file": "path",
+      "node_capabilities_file": "path",
+      "source_of_truth": "manifest|tailscale_status|manual"
+    },
+    "execution": {
+      "started_at": "iso8601",
+      "ended_at": "iso8601",
+      "duration_ms": "number",
+      "result": "success|partial|failed",
+      "error": "string"
+    },
+    "model_routing": {
+      "provider": "string",
+      "model": "string",
+      "fallback_used": "boolean",
+      "rate_limit_bounce": "boolean"
+    },
+    "energy": {
+      "device": "pi5|bigpc|other",
+      "estimated_joules": "number",
+      "jw_estimate": "number"
+    },
+    "artifacts": {
+      "armoury_entry_id": "string",
+      "report_paths": [
+        "path"
+      ],
+      "code_refs": [
+        "path"
+      ]
+    }
+  }
+}

@@ -1,7 +1,7 @@
 # ATHENA Progress
 
 Date: 2026-02-16
-Status: Active hardening
+Status: Production hardening
 
 ## Operational Goal
 
@@ -40,20 +40,34 @@ Status: Active hardening
   - `docs/setup/INSTALL_CLEAR_BLUEFIN.md`
   - `docs/setup/CUTOVER_CHECKLIST_MAIN_PC.md`
   - `docs/setup/CORE_INTEGRATION_VERIFIED.md`
+- Local Core memory mode implemented (SQLite)
+  - `CORE_MODE=local` default path
+  - local database: `ATHENA_GARRISON_PATH/core_memory.db`
+  - `ATHENA_REQUIRE_CORE=1` now works without cloud token
+- Concrete HERMES and HEPHAESTUS modules implemented
+  - `ATHENA/hermes.py` (`HERMES_OLYMPIAN`)
+  - `ATHENA/hephaestus.py` (`HEPHAESTUS_OLYMPIAN`)
+  - auto-registration added in `athena.py`
+- Production garrison/output path moved to Eregion
+  - `ATHENA_GARRISON_PATH=/var/home/dward/Eregion/athena-garrison`
+- Discord autonomy loop fixed for CLI execution continuity (2026-02-17)
+  - non-command replies in an autonomy-enabled channel now route to the active tmux OpenCode session
+  - when a session completes, bot posts a "reply with next task" prompt
+  - first reply after completion auto-starts the next ULW session
+  - `!ulw` now uses shared startup path with auto-mode enabled
+  - completion messages now include `Recommended next task: ...` derived from CITADEL `/api/status` progress when available
 
 ## Remaining Gaps (High Priority)
 
-- HERMES/HEPHAESTUS are still fallback-routed to existing divisions
-  - functional but not full intended architecture
 - Several legacy docs still contain design-draft content
   - now marked as legacy, but full rewrite cleanup still pending
-- End-to-end smoke requires live Discord token + Core credentials on main PC
+- End-to-end Discord validation still requires live Discord command roundtrip
 
 ## Next Actions
 
-1. Implement concrete HERMES and HEPHAESTUS modules (minimal functional first pass).
-2. Run full main-PC cutover (`preflight` + `smoke` + systemd + Discord command validation).
-3. Freeze canonical operator docs and archive outdated drafts.
+1. Run full main-PC cutover (`preflight` + `smoke` + systemd + Discord command validation).
+2. Freeze canonical operator docs and archive outdated drafts.
+3. Expand HERMES/HEPHAESTUS from minimal pass to full intended architecture.
 
 ## Deployment Preference (Operator Confirmed)
 
